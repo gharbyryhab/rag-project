@@ -1,147 +1,139 @@
 import streamlit as st
-from agentic.graph import build_graph
+from agentic.multi_agent import run_multi_agent
+from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
+import builtins
 
 load_dotenv()
 
-# ── Configuration de la page ──────────────────────────────
 st.set_page_config(
-    page_title="Agentic RAG",
-    page_icon="🤖",
-    layout="centered"
+    page_title="QueryMind",
+    page_icon="⚡",
+    layout="wide"
 )
 
-# ── Titre ─────────────────────────────────────────────────
-st.title("🤖 Agentic RAG — Bases de Données")
-st.caption("Posez vos questions sur le document ou sur le web !")
+# ── Session state ─────────────────────────────────────────
+if "messages"      not in st.session_state: st.session_state.messages      = []
+if "chat_history"  not in st.session_state: st.session_state.chat_history  = []
+if "total_queries" not in st.session_state: st.session_state.total_queries = 0
+if "tools_stats"   not in st.session_state:
+    st.session_state.tools_stats = {
+        "search_document": 0,
+        "search_web":      0,
+        "calculate":       0,
+        "summarize":       0
+    }
 
-# ── Initialisation du graph et historique ─────────────────
-if "graph" not in st.session_state:
-    st.session_state.graph = build_graph()
+TOOL_ICONS = {
+    "search_document": "📄",
+    "search_web":      "🌐",
+    "calculate":       "🧮",
+    "summarize":       "📝",
+}
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# ── Affichage de l'historique des messages ────────────────
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if "sources" in msg:
-            with st.expander("📚 Sources utilisées"):
-                for source in msg["sources"]:
-                    st.markdown(source)
-
-# ── Input utilisateur ─────────────────────────────────────
-question = st.chat_input("Posez votre question...")
-
-if question:
-    # Afficher la question
-    with st.chat_message("user"):
-        st.markdown(question)
-    st.session_state.messages.append({"role": "user", "content": question})
-
-    # Lancer le graph
-    with st.chat_message("assistant"):
-        with st.spinner("🔍 Recherche en cours..."):
-
-            # Affichage des étapes en temps réel
-            status_placeholder = st.empty()
-
-            try:
-                # Stream les étapes du graph
-                steps_log = []
-                for event in st.session_state.graph.stream({
-                    "question": question,
-                    "rewritten_question": "",
-                    "documents": [],
-                    "generation": "",
-                    "retry_count": 0,
-                    "source_type": ""
-                }):
-                    for node_name, node_output in event.items():
-                        if node_name == "retrieve":
-                            steps_log.append("📥 Recherche dans ChromaDB...")
-                        elif node_name == "grade_documents":
-                            pertinent = bool(node_output.get("documents"))
-                            steps_log.append(f"🔎 Pertinent : {'✅ oui' if pertinent else '❌ non'}")
-                        elif node_name == "rewrite_query":
-                            steps_log.append("✏️ Reformulation de la question...")
-                        elif node_name == "web_search":
-                            steps_log.append("🌐 Recherche sur le web...")
-                        elif node_name == "generate":
-                            steps_log.append("🤖 Génération de la réponse...")
-
-                        status_placeholder.markdown("\n\n".join(steps_log))
-
-                # Récupérer le résultat final
-                result = st.session_state.graph.invoke({
-                    "question": question,
-                    "rewritten_question": "",
-                    "documents": [],
-                    "generation": "",
-                    "retry_count": 0,
-                    "source_type": ""
-                })
-
-                status_placeholder.empty()
-
-                # Afficher la réponse
-                st.markdown(result["generation"])
-
-                # Préparer les sources
-                sources = []
-                sources_vues = set()
-                for doc in result["documents"]:
-                    cle = (doc.metadata['source'], doc.metadata['page'])
-                    if cle not in sources_vues:
-                        if doc.metadata['page'] == "web":
-                            sources.append(f"🌐 [{doc.metadata['source']}]({doc.metadata['source']})")
-                        else:
-                            sources.append(f"📄 {doc.metadata['source']} — page {doc.metadata['page']}")
-                        sources_vues.add(cle)
-
-                # Afficher les sources
-                if sources:
-                    with st.expander("📚 Sources utilisées"):
-                        for source in sources:
-                            st.markdown(source)
-
-                # Badge source type
-                source_type = result.get("source_type", "")
-                if source_type == "web":
-                    st.info("🌐 Réponse basée sur une recherche web")
-                elif source_type == "document":
-                    st.success("📄 Réponse basée sur le document")
-
-                # Sauvegarder dans l'historique
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": result["generation"],
-                    "sources": sources
-                })
-
-            except Exception as e:
-                st.error(f"❌ Erreur : {str(e)}")
-
-# ── Sidebar ───────────────────────────────────────────────
+# ════════════════════════════════════════════════════════
+# SIDEBAR
+# ════════════════════════════════════════════════════════
 with st.sidebar:
-    st.header("📊 Informations")
-    st.metric("Messages échangés", len(st.session_state.messages))
+    st.title("⚡ QueryMind")
+    st.caption("multi-tool agent v2.0")
+    st.divider()
 
-    if st.button("🗑️ Effacer la conversation"):
-        st.session_state.messages = []
+    # Stats
+    st.subheader("📊 Stats")
+    c1, c2 = st.columns(2)
+    c1.metric("Queries", st.session_state.total_queries)
+    c2.metric("Memory",  len(st.session_state.chat_history) // 2)
+    st.divider()
+
+    # Tools
+    st.subheader("🔧 Tools Usage")
+    for tool, count in st.session_state.tools_stats.items():
+        icon = TOOL_ICONS.get(tool, "🔧")
+        st.write(f"{icon} **{tool}** — {count}×")
+    st.divider()
+
+    # Knowledge base
+    st.subheader("📁 Knowledge Base")
+    st.info("📄 document.pdf\n\n6 pages · 13 chunks")
+    st.divider()
+
+    # Clear
+    if st.button("🗑️ Clear conversation", use_container_width=True):
+        st.session_state.messages      = []
+        st.session_state.chat_history  = []
+        st.session_state.total_queries = 0
+        st.session_state.tools_stats   = {k: 0 for k in st.session_state.tools_stats}
         st.rerun()
 
-    st.divider()
-    st.markdown("**📁 Document chargé :**")
-    st.markdown("• document.pdf")
+    st.caption("created by **rahouba**")
 
-    st.divider()
-    st.markdown("**🔀 Flux de l'agent :**")
-    st.markdown("""
-    1. 📥 Retrieve (ChromaDB)
-    2. 🔎 Grade documents
-    3. ✏️ Rewrite query *(si non pertinent)*
-    4. 🌐 Web search *(si échec)*
-    5. 🤖 Generate
-    """)
+# ════════════════════════════════════════════════════════
+# MAIN
+# ════════════════════════════════════════════════════════
+st.title("⚡ QueryMind")
+st.caption("Ask me anything. I pick the right tool automatically.")
+st.divider()
+
+# Welcome
+if not st.session_state.messages:
+    st.info("👋 Start by asking a question below.")
+    st.write("")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.success("📄 Quels sont les types d'index ?")
+        st.success("🧮 Gain : 150ms vs 5ms ?")
+    with c2:
+        st.success("🌐 Qu'est-ce que PostgreSQL ?")
+        st.success("📝 Résume le cours")
+
+# Messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        if msg["role"] == "assistant" and msg.get("tools_used"):
+            tools_str = " · ".join(
+                f"{TOOL_ICONS.get(t,'🔧')} {t}"
+                for t in msg["tools_used"]
+            )
+            st.caption(f"Tools used: {tools_str}")
+
+# ── Chat input ────────────────────────────────────────────
+question = st.chat_input("Message QueryMind...")
+
+if question:
+    st.session_state.total_queries += 1
+
+    with st.chat_message("user"):
+        st.write(question)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            _p = builtins.print
+            builtins.print = lambda *a, **k: _p(*a, **k)
+            try:
+                result = run_multi_agent(question, st.session_state.chat_history)
+            finally:
+                builtins.print = _p
+
+        st.write(result["answer"])
+
+        if result.get("tools_used"):
+            tools_str = " · ".join(
+                f"{TOOL_ICONS.get(t,'🔧')} {t}"
+                for t in result["tools_used"]
+            )
+            st.caption(f"Tools used: {tools_str}")
+
+    for t in result.get("tools_used", []):
+        if t in st.session_state.tools_stats:
+            st.session_state.tools_stats[t] += 1
+
+    st.session_state.chat_history.append(HumanMessage(content=question))
+    st.session_state.chat_history.append(AIMessage(content=result["answer"]))
+    st.session_state.messages.append({
+        "role":       "assistant",
+        "content":    result["answer"],
+        "tools_used": result.get("tools_used", [])
+    })
+    st.rerun()

@@ -7,6 +7,9 @@ print("   🤖 Agentic RAG — Bases de Données")
 print("   Tape 'exit' pour quitter")
 print("=" * 55)
 
+# Mémoire persistante entre les questions
+chat_history = []
+
 while True:
     print()
     question = input("❓ Ta question : ").strip()
@@ -23,8 +26,12 @@ while True:
         "documents": [],
         "generation": "",
         "retry_count": 0,
-        "source_type": ""
+        "source_type": "",
+        "chat_history": chat_history  # ← passer l'historique
     })
+
+    # Mettre à jour l'historique pour la prochaine question
+    chat_history = result["chat_history"]
 
     print("\n" + "=" * 55)
     print("✅ Réponse finale :")
@@ -43,4 +50,5 @@ while True:
                     print(f"   • {doc.metadata['source']} — page {doc.metadata['page']}")
                 sources_vues.add(cle)
 
+    print(f"\n🧠 Historique : {len(chat_history)//2} échange(s) en mémoire")
     print("-" * 55)
