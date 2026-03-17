@@ -2,9 +2,10 @@ from dotenv import load_dotenv
 import os
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, AIMessage
 from ddgs import DDGS
 from agentic.state import AgentState
 
@@ -33,7 +34,6 @@ llm = ChatGoogleGenerativeAI(
 
 # ══════════════════════════════════════════════════════════
 # Nœud 1 : retrieve
-# Récupère les chunks pertinents depuis ChromaDB
 # ══════════════════════════════════════════════════════════
 def retrieve(state: AgentState) -> AgentState:
     print("\n📥 [retrieve] Recherche dans ChromaDB...")
@@ -45,7 +45,6 @@ def retrieve(state: AgentState) -> AgentState:
 
 # ══════════════════════════════════════════════════════════
 # Nœud 2 : grade_documents
-# L'agent évalue si les chunks sont pertinents
 # ══════════════════════════════════════════════════════════
 def grade_documents(state: AgentState) -> AgentState:
     print("\n🔎 [grade_documents] Évaluation de la pertinence...")
@@ -63,7 +62,6 @@ Contexte : {context}
 Réponse (oui/non) :""")
 
     chain = prompt | llm | StrOutputParser()
-
     context = "\n\n".join(doc.page_content for doc in docs)
     result = chain.invoke({"question": question, "context": context})
     relevant = "oui" in result.lower()
@@ -74,7 +72,6 @@ Réponse (oui/non) :""")
 
 # ══════════════════════════════════════════════════════════
 # Nœud 3 : rewrite_query
-# Reformule la question si les chunks ne sont pas pertinents
 # ══════════════════════════════════════════════════════════
 def rewrite_query(state: AgentState) -> AgentState:
     print("\n✏️  [rewrite_query] Reformulation de la question...")
@@ -98,7 +95,6 @@ Question reformulée :""")
 
 # ══════════════════════════════════════════════════════════
 # Nœud 4 : web_search
-# Cherche sur le web si le document ne contient pas la réponse
 # ══════════════════════════════════════════════════════════
 def web_search(state: AgentState) -> AgentState:
     print("\n🌐 [web_search] Recherche sur le web...")
@@ -106,7 +102,11 @@ def web_search(state: AgentState) -> AgentState:
     question = state.get("rewritten_question") or state["question"]
 
     with DDGS() as ddgs:
-        results = list(ddgs.text(question, max_results=3))
+        results = list(ddgs.text(question, max_results=3, region="wt-wt"))
+    
+    if not results:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(question, max_results=3, region="us-en"))
 
     web_docs = []
     for r in results:
@@ -120,28 +120,36 @@ def web_search(state: AgentState) -> AgentState:
 
 
 # ══════════════════════════════════════════════════════════
-# Nœud 5 : generate
-# Génère la réponse finale avec le contexte récupéré
+# Nœud 5 : generate (avec mémoire conversationnelle)
 # ══════════════════════════════════════════════════════════
 def generate(state: AgentState) -> AgentState:
     print("\n🤖 [generate] Génération de la réponse...")
 
-    prompt = PromptTemplate.from_template("""
-Tu es un assistant pédagogique. Réponds à la question en te basant
+    # Prompt avec historique
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """Tu es un assistant pédagogique. Réponds à la question en te basant
 uniquement sur le contexte fourni. Si la réponse n'est pas dans
-le contexte, dis-le clairement.
-
-Contexte :
-{context}
-
-Question : {question}
-
-Réponse :""")
+le contexte, dis-le clairement. Tiens compte de l'historique de la conversation."""),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "Contexte :\n{context}\n\nQuestion : {question}")
+    ])
 
     chain = prompt | llm | StrOutputParser()
 
     context = "\n\n".join(doc.page_content for doc in state["documents"])
     question = state.get("rewritten_question") or state["question"]
-    response = chain.invoke({"context": context, "question": question})
+    chat_history = state.get("chat_history", [])
 
-    return {**state, "generation": response}
+    response = chain.invoke({
+        "context": context,
+        "question": question,
+        "chat_history": chat_history
+    })
+
+    # Mettre à jour l'historique
+    updated_history = chat_history + [
+        HumanMessage(content=question),
+        AIMessage(content=response)
+    ]
+
+    return {**state, "generation": response, "chat_history": updated_history}
