@@ -48,9 +48,7 @@ def parse_content(content) -> str:
 def run_multi_agent(question: str, chat_history: list = []) -> dict:
     print(f"\n🤖 [multi_agent] Analyse de la question...")
 
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + chat_history + [
-        HumanMessage(content=question)
-    ]
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + chat_history + [HumanMessage(content=question)]
 
     tools_used = []
     max_iterations = 5

@@ -8,6 +8,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, AIMessage
 from ddgs import DDGS
 from agentic.state import AgentState
+from langchain_community.tools.tavily_search import TavilySearchResults
+
 
 load_dotenv()
 
@@ -118,6 +120,27 @@ def web_search(state: AgentState) -> AgentState:
 
     return {**state, "documents": web_docs, "source_type": "web"}
 
+
+# Nœud amélioré web_search
+# def web_search_improved(state: AgentState) -> AgentState:
+    
+#     # 1. LLM reformule la question pour le web
+#     web_query = llm.invoke(f"Reformule pour une recherche web optimale : {state['question']}")
+    
+#     # 2. Tavily cherche et retourne le contenu complet
+#     tool = TavilySearchResults(max_results=3)
+#     results = tool.invoke(web_query)
+    
+#     # 3. Convertir en Documents LangChain
+#     web_docs = [
+#         Document(
+#             page_content=r["content"],  # ← contenu complet, pas snippet
+#             metadata={"source": r["url"], "page": "web"}
+#         )
+#         for r in results
+#     ]
+    
+#     return {**state, "documents": web_docs, "source_type": "web"}
 
 # ══════════════════════════════════════════════════════════
 # Nœud 5 : generate (avec mémoire conversationnelle)

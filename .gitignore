@@ -4,3 +4,4 @@ __pycache__/
 .env
 vectorstore/
 *.log
+requirements copy.txt
